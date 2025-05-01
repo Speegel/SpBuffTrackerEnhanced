@@ -1,0 +1,14 @@
+## Interface: 11200
+## Title: SpBuffTracker Enhanced
+## Notes: Enhanced buff tracking addon for World of Warcraft 1.12
+## Version: 1.0.0
+## Author: Enhanced version of Speegel's original
+## SavedVariables: SpBuffTrackerEnhancedDB
+## X-Category: Buffs
+
+# Main addon file
+SpBuffTrackerEnhanced.lua
+
+# Sound files
+# sounds\warning.ogg
+# sounds\buff_gained.ogg
