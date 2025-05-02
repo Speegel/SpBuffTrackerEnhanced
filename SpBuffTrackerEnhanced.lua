@@ -9,10 +9,11 @@
 ]]
 
 -- Main addon table
+-- Main addon table and globals
 SpBuffTrackerEnhanced = {
     version = "1.0.0",
     buffs = {},
-    frame = nil,
+    frame = nil, -- We'll set this during initialization
     options = {
         enabled = true,
         scale = 1.0,
@@ -44,6 +45,8 @@ SpBuffTrackerEnhanced = {
     },
     -- Default buffs to track
     trackedBuffs = {
+        -- Aura
+        ["Rejuvenation"] = true,
         -- World buffs
         ["Rallying Cry of the Dragonslayer"] = true,
         ["Spirit of Zandalar"] = true,
@@ -76,15 +79,383 @@ SpBuffTrackerEnhanced = {
 local SpBT = SpBuffTrackerEnhanced
 local _G = getfenv(0)
 
--- Initialize addon
+-- Scan all current buffs and list them
+function SpBT:ScanAllBuffs()
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- SCANNING ALL BUFFS -----")
+    
+    -- Try direct buff check manually
+    local buffCount = 0
+    local i = 0
+    local buffId = GetPlayerBuff(i, "HELPFUL")
+    
+    if buffId < 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker: ERROR - No buffs found on player!|r")
+    else
+        -- List all buffs with textures
+        while buffId >= 0 and i < 32 do
+            buffCount = buffCount + 1
+            
+            -- Try to get all information safely
+            local buffTexture = "Unknown"
+            local textureSuccess, textureError = pcall(function() 
+                buffTexture = GetPlayerBuffTexture(buffId) 
+            end)
+            
+            if not textureSuccess then
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000SpBuffTracker: Error getting texture: %s|r", tostring(textureError)))
+            end
+            
+            local timeLeft = -1
+            local timeSuccess, timeError = pcall(function() 
+                timeLeft = GetPlayerBuffTimeLeft(buffId) 
+            end)
+            
+            if not timeSuccess then
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000SpBuffTracker: Error getting time: %s|r", tostring(timeError)))
+            end
+            
+            -- Extract the icon name from the texture path
+            local iconName = buffTexture
+            if type(buffTexture) == "string" then
+                iconName = string.gsub(buffTexture, "Interface\\Icons\\", "")
+            end
+            
+            -- Log what we found with the icon name
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker: Buff[%d] ID=%d, Icon=%s, Time=%.1f|r", 
+                i, buffId, iconName, timeLeft))
+            
+            -- Check if this matches any known buffs
+            local matchedBuff = "Unknown"
+            for texture, buffName in pairs(self.buffTextureMap) do
+                if texture == buffTexture then
+                    matchedBuff = buffName
+                    break
+                end
+            end
+            
+            -- Log whether this is a known buff
+            if matchedBuff ~= "Unknown" then
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FFFF  Identified as: %s|r", matchedBuff))
+            end
+            
+            -- Move to next buff
+            i = i + 1
+            buffId = GetPlayerBuff(i, "HELPFUL")
+        end
+    end
+    
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker: Found %d total buffs|r", buffCount))
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- END BUFF SCAN -----")
+    
+    return buffCount
+end-- Create a slash command to dump debug info
+function SpBT:DumpDebugInfo()
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- BEGIN DEBUG DUMP -----")
+    
+    -- Check addon state
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Version: " .. self.version)
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Frame exists: " .. tostring(self.frame ~= nil))
+    
+    if self.frame then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Frame name: " .. tostring(self.frame:GetName()))
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Frame visible: " .. tostring(self.frame:IsVisible()))
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Frame dimensions: " .. self.frame:GetWidth() .. "x" .. self.frame:GetHeight())
+    end
+    
+    -- Force a buff check and log everything
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- BUFF API CHECK -----")
+    
+    -- Use pcall to ensure errors don't break the debug
+    local success, errorMsg = pcall(function()
+        -- Try direct buff check manually
+        local buffCount = 0
+        local i = 0
+        local buffId = GetPlayerBuff(i, "HELPFUL")
+        
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: GetPlayerBuff(0) = " .. tostring(buffId))
+        
+        if buffId < 0 then
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker: ERROR - GetPlayerBuff API is not returning any buffs!")
+        else
+            while buffId >= 0 and i < 32 do
+                buffCount = buffCount + 1
+                
+                -- Try to get all information safely
+                local buffTexture = "Unknown"
+                local textureSuccess = pcall(function() 
+                    buffTexture = GetPlayerBuffTexture(buffId) 
+                end)
+                
+                local timeLeft = -1
+                local timeSuccess = pcall(function() 
+                    timeLeft = GetPlayerBuffTimeLeft(buffId) 
+                end)
+                
+                -- Log what we found
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker: Buff[%d] = ID: %d, Texture: %s, Time: %.1f|r", 
+                    i, buffId, tostring(buffTexture), timeLeft))
+                
+                -- Move to next buff
+                i = i + 1
+                buffId = GetPlayerBuff(i, "HELPFUL")
+            end
+            
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: Found " .. buffCount .. " buffs total")
+        end
+    end)
+    
+    if not success then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker ERROR in debug: " .. tostring(errorMsg))
+    end
+    
+    -- Check trackedBuffs table
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- TRACKED BUFFS -----")
+    
+    local count = 0
+    if self.trackedBuffs then
+        for buffName, isTracked in pairs(self.trackedBuffs) do
+            count = count + 1
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker: Tracking[%d]: %s = %s|r", 
+                count, tostring(buffName), tostring(isTracked)))
+        end
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker ERROR: trackedBuffs table is nil!")
+    end
+    
+    -- Check currently detected buffs
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- CURRENT BUFFS -----")
+    
+    local buffCount = 0
+    if self.buffs then
+        buffCount = table.getn(self.buffs)
+        for i = 1, buffCount do
+            local buff = self.buffs[i]
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker: Current[%d]: %s (%.1f secs)|r", 
+                i, buff.name, buff.timeLeft))
+        end
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker ERROR: buffs table is nil!")
+    end
+    
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker: ----- END DEBUG DUMP -----")
+end-- Create a table to map buff textures to names for vanilla WoW
+SpBT.buffTextureMap = {
+    -- World buffs
+    ["Interface\\Icons\\Spell_Shadow_Charm"] = "Rallying Cry of the Dragonslayer",
+    ["Interface\\Icons\\Ability_Creature_Cursed_04"] = "Spirit of Zandalar",
+    ["Interface\\Icons\\Spell_Holy_MagicalSentry"] = "Songflower Serenade",
+    ["Interface\\Icons\\Spell_Nature_Regeneration"] = "Warchief's Blessing",
+    ["Interface\\Icons\\Spell_Holy_FlashHeal"] = "Slip'kik's Savvy",
+    ["Interface\\Icons\\Ability_Warrior_InnerRage"] = "Fengus' Ferocity",
+    ["Interface\\Icons\\Ability_Warrior_OffensiveStance"] = "Mol'dar's Moxie",
+    ["Interface\\Icons\\Spell_Holy_InnerFire"] = "Fire Festival Fortitude",
+    ["Interface\\Icons\\Spell_Fire_Immolation"] = "Fire Festival Fury",
+    
+    -- Consumables
+    ["Interface\\Icons\\INV_Potion_12"] = "Elixir of the Mongoose",
+    ["Interface\\Icons\\INV_Potion_61"] = "Elixir of Giants",
+    ["Interface\\Icons\\INV_Potion_09"] = "Elixir of Greater Agility",
+    ["Interface\\Icons\\INV_Potion_10"] = "Elixir of Greater Intellect",
+    ["Interface\\Icons\\INV_Potion_25"] = "Greater Arcane Elixir",
+    ["Interface\\Icons\\INV_Potion_21"] = "Elixir of Greater Firepower",
+    ["Interface\\Icons\\INV_Potion_41"] = "Flask of Supreme Power",
+    ["Interface\\Icons\\INV_Potion_62"] = "Flask of the Titans",
+    ["Interface\\Icons\\INV_Potion_97"] = "Flask of Distilled Wisdom",
+    ["Interface\\Icons\\INV_Potion_45"] = "Mageblood Potion",
+    ["Interface\\Icons\\INV_Misc_Food_19"] = "Blessed Sunfruit",
+    ["Interface\\Icons\\INV_Misc_Food_63"] = "Smoked Desert Dumplings",
+    ["Interface\\Icons\\INV_Misc_Fish_13"] = "Grilled Squid",
+    ["Interface\\Icons\\INV_Drink_07"] = "Nightfin Soup",
+    ["Interface\\Icons\\INV_Misc_Food_15"] = "Dire Maul Tribute",
+    
+    -- Class buffs
+    ["Interface\\Icons\\Spell_Holy_WordFortitude"] = "Power Word: Fortitude",
+    ["Interface\\Icons\\Spell_Holy_PrayerOfSpirit"] = "Prayer of Spirit",
+    ["Interface\\Icons\\Spell_Magic_GreaterBlessingofKings"] = "Blessing of Kings",
+    ["Interface\\Icons\\Spell_Holy_GreaterBlessingofWisdom"] = "Blessing of Wisdom",
+    ["Interface\\Icons\\Spell_Holy_GreaterBlessingofSalvation"] = "Blessing of Salvation",
+    ["Interface\\Icons\\Spell_Magic_GreaterBlessingofLight"] = "Blessing of Light",
+    ["Interface\\Icons\\Spell_Holy_GreaterBlessingofMight"] = "Blessing of Might",
+    ["Interface\\Icons\\Spell_Magic_GreaterBlessingofSanctuary"] = "Blessing of Sanctuary",
+    ["Interface\\Icons\\Spell_Nature_Regeneration"] = "Rejuvenation",
+    ["Interface\\Icons\\Spell_Nature_ResistNature"] = "Mark of the Wild",
+    ["Interface\\Icons\\Spell_Nature_Bloodlust"] = "Bloodlust",
+    ["Interface\\Icons\\Spell_Shadow_DetectLesserInvisibility"] = "Arcane Intellect",
+    
+    -- Add more mappings as needed
+}
+
+-- Function to get buff name from texture with better debugging
+function SpBT:GetBuffNameFromTexture(texture)
+    -- Log the texture we're trying to match
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFBBBBFFSpBuffTracker Debug: Looking up texture: %s|r", tostring(texture)))
+    
+    -- Check if this is a known texture in our mapping
+    if self.buffTextureMap[texture] then
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFBBBBFFSpBuffTracker Debug: Found matching name: %s|r", self.buffTextureMap[texture]))
+        return self.buffTextureMap[texture]
+    else
+        -- Not in mapping, return a shortened version of the texture path
+        local shortTexture = "Unknown"
+        
+        if texture and type(texture) == "string" then
+            -- Try to extract icon name from path
+            shortTexture = string.gsub(texture, "Interface\\Icons\\", "")
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF9900SpBuffTracker Warning: Texture not in mapping: %s (using %s)|r", texture, shortTexture))
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Invalid texture value!|r")
+        end
+        
+        return shortTexture
+    end
+end-- Create a buff frame
+function SpBT:CreateBuffFrame(buffIndex)
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Creating buff frame %d|r", buffIndex))
+    
+    -- Make sure we have the main frame
+    if not SpBuffTrackerEnhancedMainFrame then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Main frame not found when creating buff frame!|r")
+        return nil
+    end
+    
+    local frame = CreateFrame("Button", "SpBuffTrackerEnhancedBuff"..buffIndex, SpBuffTrackerEnhancedMainFrame)
+    frame:SetWidth(self.options.buffSize)
+    frame:SetHeight(self.options.buffSize)
+    
+    -- Create icon texture
+    frame.icon = frame:CreateTexture(frame:GetName().."Icon", "ARTWORK")
+    frame.icon:SetAllPoints(frame)
+    frame.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93) -- Trim edges
+    
+    -- Create border texture
+    frame.border = frame:CreateTexture(frame:GetName().."Border", "OVERLAY")
+    frame.border:SetWidth(self.options.buffSize + 2)
+    frame.border:SetHeight(self.options.buffSize + 2)
+    frame.border:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.border:SetTexture("Interface\\Buttons\\UI-Debuff-Border")
+    
+    -- Create cooldown model
+    frame.cooldown = CreateFrame("Model", frame:GetName().."Cooldown", frame, "CooldownFrameTemplate")
+    frame.cooldown:SetAllPoints(frame)
+    frame.cooldown:SetFrameLevel(frame:GetFrameLevel())
+    
+    -- Create timer text
+    frame.timer = frame:CreateFontString(frame:GetName().."Timer", "OVERLAY")
+    frame.timer:SetFont(self.options.fontName, self.options.fontSize, self.options.fontFlags)
+    frame.timer:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+    
+    -- Create name text
+    frame.name = frame:CreateFontString(frame:GetName().."Name", "OVERLAY")
+    frame.name:SetFont(self.options.fontName, self.options.fontSize - 2, self.options.fontFlags)
+    frame.name:SetPoint("TOP", frame, "BOTTOM", 0, -1)
+    
+    -- Set up tooltip
+    frame:SetScript("OnEnter", function()
+        if SpBT.options.showTooltips then
+            GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
+            local buff = SpBT.buffs[this:GetID()]
+            if buff then
+                GameTooltip:AddLine(buff.name)
+                if buff and buff.duration and buff.duration > 0 and buff.timeLeft then
+                    GameTooltip:AddLine("Time remaining: " .. SpBT:FormatTime(buff.timeLeft), 1, 1, 1)
+                end
+                GameTooltip:Show()
+            end
+        end
+    end)
+    frame:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    
+    -- Set up context menu
+    frame:RegisterForClicks("RightButtonUp")
+    frame:SetScript("OnClick", function()
+        if arg1 == "RightButton" then
+            local buff = SpBT.buffs[this:GetID()]
+            if buff then
+                SpBuffTrackerEnhanced.trackedBuffs[buff.name] = nil
+                SpBT:SaveVariables()
+                SpBT:UpdateAllBuffs()
+            end
+        end
+    end)
+    
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Buff frame %d created successfully|r", buffIndex))
+    return frame
+end-- Save variables to disk
+function SpBT:SaveVariables()
+    -- Make sure the DB exists
+    if not SpBuffTrackerEnhancedDB then
+        SpBuffTrackerEnhancedDB = {}
+    end
+    
+    -- Copy options (excluding trackedBuffs)
+    for k, v in pairs(self.options) do
+        if k ~= "trackedBuffs" then
+            SpBuffTrackerEnhancedDB[k] = v
+        end
+    end
+    
+    -- Make sure we're using the global trackedBuffs reference
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
+    
+    -- Create a fresh trackedBuffs table
+    SpBuffTrackerEnhancedDB.trackedBuffs = {}
+    
+    -- Only copy buffs that are actually tracked (value is true)
+    local count = 0
+    if SpBuffTrackerEnhanced.trackedBuffs then
+        for buffName, isTracked in pairs(SpBuffTrackerEnhanced.trackedBuffs) do
+            if isTracked then
+                SpBuffTrackerEnhancedDB.trackedBuffs[buffName] = true
+                count = count + 1
+            end
+        end
+    end
+    
+    -- Print debug for troubleshooting
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF77CCFFSpBuffTracker: Saved %d tracked buffs to database|r", count))
+    
+    -- Log each buff we're saving
+    if count > 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF77CCFFSpBuffTracker: Saved buffs:|r")
+        for buffName, _ in pairs(SpBuffTrackerEnhancedDB.trackedBuffs) do
+            DEFAULT_CHAT_FRAME:AddMessage("  - " .. buffName)
+        end
+    end
+end
+
+-- Initialize addon - simplified for stability
 function SpBT:Initialize()
-    -- Create main frame
+    -- Debug info
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced: Initializing with simplified approach for stability|r")
+    
+    -- CRITICAL: Ensure we're using the global trackedBuffs reference
+    if not SpBuffTrackerEnhanced.trackedBuffs then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Global trackedBuffs is nil!|r")
+        SpBuffTrackerEnhanced.trackedBuffs = {}
+    end
+    
+    -- Assign the global reference to our local table
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
+    
+    -- Debug output for trackedBuffs
+    local count = 0
+    for buffName, _ in pairs(self.trackedBuffs) do
+        count = count + 1
+    end
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Initialized with %d tracked buffs|r", count))
+    
+    -- Create main frame - this is the most critical part
     self:CreateMainFrame()
     
-    -- Register events
-    self.frame:RegisterEvent("PLAYER_AURAS_CHANGED")
-    self.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
-    self.frame:RegisterEvent("UNIT_AURA")
+    -- Only register a few essential events to avoid complexity
+    if self.frame then
+        self.frame:RegisterEvent("PLAYER_AURAS_CHANGED")
+        self.frame:RegisterEvent("PLAYER_ENTERING_WORLD")
+    else
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Cannot register events - frame is nil!|r")
+    end
     
     -- Set up slash commands
     SLASH_SPBUFFTRACKER1 = "/spbt"
@@ -92,18 +463,6 @@ function SpBT:Initialize()
     SlashCmdList["SPBUFFTRACKER"] = function(msg)
         self:HandleSlashCommand(msg)
     end
-
-    -- Create timer for updates
-    self.updateTimer = 0
-    
-    -- Load saved variables
-    self:LoadVariables()
-    
-    -- Create options panel
-    self:CreateOptionsPanel()
-    
-    -- Initial update
-    self:UpdateAllBuffs()
     
     -- Print startup message
     DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced v" .. self.version .. " loaded. Type /spbt for options.|r")
@@ -111,23 +470,41 @@ end
 
 -- Load saved variables from disk
 function SpBT:LoadVariables()
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF77CCFFSpBuffTracker: Loading saved variables...|r")
+    
+    -- CRITICAL: Make sure we keep the reference to the global trackedBuffs
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF77CCFFSpBuffTracker: Preserving trackedBuffs reference...|r")
+    
+    -- Load options from saved variables
     if SpBuffTrackerEnhancedDB then
-        -- Merge saved options with defaults
         for k, v in pairs(SpBuffTrackerEnhancedDB) do
-            if self.options[k] ~= nil then
+            if k ~= "trackedBuffs" and self.options[k] ~= nil then
                 self.options[k] = v
             end
         end
-        
-        -- Load tracked buffs if saved
-        if SpBuffTrackerEnhancedDB.trackedBuffs then
-            self.trackedBuffs = SpBuffTrackerEnhancedDB.trackedBuffs
-        end
     else
-        -- Initialize database
-        SpBuffTrackerEnhancedDB = self.options
-        SpBuffTrackerEnhancedDB.trackedBuffs = self.trackedBuffs
+        -- Initialize database if it doesn't exist
+        SpBuffTrackerEnhancedDB = {}
+        for k, v in pairs(self.options) do
+            if k ~= "trackedBuffs" then
+                SpBuffTrackerEnhancedDB[k] = v
+            end
+        end
     end
+    
+    -- Apply loaded settings
+    self:ApplySettings()
+    
+    -- Let's dump the trackedBuffs to chat to debug
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66FFFFSpBuffTracker Debug: Tracked buffs after loading:|r")
+    for buffName, _ in pairs(self.trackedBuffs) do
+        DEFAULT_CHAT_FRAME:AddMessage("  - " .. buffName)
+    end
+    SpBuffTrackerEnhancedDB.trackedBuffs = {}
+        for buffName, isTracked in pairs(self.trackedBuffs) do
+            SpBuffTrackerEnhancedDB.trackedBuffs[buffName] = isTracked
+        end
+    -- end
     
     -- Apply loaded settings
     self:ApplySettings()
@@ -135,84 +512,168 @@ end
 
 -- Save variables to disk
 function SpBT:SaveVariables()
-    SpBuffTrackerEnhancedDB = self.options
-    SpBuffTrackerEnhancedDB.trackedBuffs = self.trackedBuffs
+    -- Make sure the DB exists
+    if not SpBuffTrackerEnhancedDB then
+        SpBuffTrackerEnhancedDB = {}
+    end
+    
+    -- Copy options (excluding trackedBuffs)
+    for k, v in pairs(self.options) do
+        if k ~= "trackedBuffs" then
+            SpBuffTrackerEnhancedDB[k] = v
+        end
+    end
+    
+    -- Make sure we're using the global trackedBuffs reference
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
+    
+    -- Create a fresh trackedBuffs table
+    SpBuffTrackerEnhancedDB.trackedBuffs = {}
+    
+    -- Only copy buffs that are actually tracked (value is true)
+    local count = 0
+    if SpBuffTrackerEnhanced.trackedBuffs then
+        for buffName, isTracked in pairs(SpBuffTrackerEnhanced.trackedBuffs) do
+            if isTracked then
+                SpBuffTrackerEnhancedDB.trackedBuffs[buffName] = true
+                count = count + 1
+            end
+        end
+    end
+    
+    -- Print debug for troubleshooting
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF77CCFFSpBuffTracker: Saved %d tracked buffs to database|r", count))
+    
+    -- Log each buff we're saving
+    if count > 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF77CCFFSpBuffTracker: Saved buffs:|r")
+        for buffName, _ in pairs(SpBuffTrackerEnhancedDB.trackedBuffs) do
+            DEFAULT_CHAT_FRAME:AddMessage("  - " .. buffName)
+        end
+    end
+end
+
+-- Count entries in a table (helper function)
+function SpBT:CountTableEntries(tbl)
+    local count = 0
+    for _ in pairs(tbl) do
+        count = count + 1
+    end
+    return count
 end
 
 -- Apply current settings
 function SpBT:ApplySettings()
-    self.frame:SetScale(self.options.scale)
-    self.frame:ClearAllPoints()
-    self.frame:SetPoint(
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Applying settings|r")
+    
+    -- Make sure we have the correct frame reference
+    if not SpBuffTrackerEnhancedMainFrame then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Cannot apply settings - global main frame is nil!|r")
+        return
+    end
+    
+    -- Update our local reference just to be safe
+    self.frame = SpBuffTrackerEnhancedMainFrame
+    
+    -- Apply scale
+    SpBuffTrackerEnhancedMainFrame:SetScale(self.options.scale)
+    
+    -- Apply position
+    SpBuffTrackerEnhancedMainFrame:ClearAllPoints()
+    
+    -- Safety check for relativeTo
+    local relativeTo = _G[self.options.position.relativeTo]
+    if not relativeTo then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9900SpBuffTracker Warning: Invalid relativeTo frame, using UIParent|r")
+        relativeTo = UIParent
+    end
+    
+    -- Set the position
+    SpBuffTrackerEnhancedMainFrame:SetPoint(
         self.options.position.point,
-        self.options.position.relativeTo,
+        relativeTo,
         self.options.position.relativePoint,
         self.options.position.x,
         self.options.position.y
     )
     
+    -- Apply visibility
+    if self.options.enabled then
+        SpBuffTrackerEnhancedMainFrame:Show()
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Frame shown (enabled=true)|r")
+    else
+        SpBuffTrackerEnhancedMainFrame:Hide()
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Frame hidden (enabled=false)|r")
+    end
+    
     -- Refresh buff display
     self:UpdateAllBuffs()
     self:LayoutBuffs()
+    
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Settings applied successfully|r")
 end
 
 -- Create the main frame
 function SpBT:CreateMainFrame()
-    self.frame = CreateFrame("Frame", "SpBuffTrackerEnhancedFrame", UIParent)
-    self.frame:SetWidth(40)
-    self.frame:SetHeight(40)
-    self.frame:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
-    self.frame:SetMovable(true)
-    self.frame:EnableMouse(true)
-    self.frame:RegisterForDrag("LeftButton")
-    self.frame:SetScript("OnDragStart", function()
-        if IsShiftKeyDown() then
-            this:StartMoving()
-        end
-    end)
-    self.frame:SetScript("OnDragStop", function()
-        this:StopMovingOrSizing()
-        local point, relativeTo, relativePoint, x, y = this:GetPoint()
-        SpBT.options.position.point = point
-        SpBT.options.position.relativeTo = relativeTo:GetName()
-        SpBT.options.position.relativePoint = relativePoint
-        SpBT.options.position.x = x
-        SpBT.options.position.y = y
-        SpBT:SaveVariables()
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Creating main frame|r")
+    
+    -- Create a global reference to the frame first - using fixed standard naming
+    local mainFrame = CreateFrame("Frame", "SpBuffTrackerEnhancedFrame", UIParent)
+    
+    -- Set up the frame - use minimal settings to avoid crashes
+    mainFrame:SetWidth(100)
+    mainFrame:SetHeight(50)
+    mainFrame:SetPoint("CENTER", UIParent, "CENTER", 0, -200)
+    
+    -- Create a simple background to make it visible
+    local bg = mainFrame:CreateTexture("SpBuffTrackerEnhancedFrameBG", "BACKGROUND")
+    bg:SetTexture(0, 0, 0, 0.5) -- Semi-transparent black
+    bg:SetAllPoints(mainFrame)
+    
+    -- Create a title text to identify the frame
+    local titleText = mainFrame:CreateFontString("SpBuffTrackerEnhancedFrameTitle", "OVERLAY", "GameFontNormal")
+    titleText:SetPoint("CENTER", mainFrame, "CENTER", 0, 0)
+    titleText:SetText("SpBuffTracker")
+    
+    -- Keep movement functionality simple to avoid crashes
+    mainFrame:SetMovable(true)
+    mainFrame:EnableMouse(true)
+    mainFrame:RegisterForDrag("LeftButton")
+    
+    -- Simple dragging logic that should be stable
+    mainFrame:SetScript("OnDragStart", function()
+        -- No shift key requirement to reduce complexity
+        mainFrame:StartMoving()
     end)
     
-    -- Set up event handling
-    self.frame:SetScript("OnEvent", function()
-        if event == "PLAYER_AURAS_CHANGED" or event == "UNIT_AURA" and arg1 == "player" then
+    mainFrame:SetScript("OnDragStop", function()
+        mainFrame:StopMovingOrSizing()
+        -- Don't try to save position yet - just stop movement
+    end)
+    
+    -- Set up very basic event handling for now
+    mainFrame:SetScript("OnEvent", function()
+        if event == "PLAYER_AURAS_CHANGED" or (event == "UNIT_AURA" and arg1 == "player") then
+            -- Just call UpdateAllBuffs, nothing else
             SpBT:UpdateAllBuffs()
-        elseif event == "PLAYER_ENTERING_WORLD" then
-            SpBT:UpdateAllBuffs()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Buff change detected|r")
         end
     end)
     
-    -- Set up update handling
-    self.frame:SetScript("OnUpdate", function()
-        SpBT.updateTimer = SpBT.updateTimer + arg1
-        if SpBT.updateTimer >= SpBT.options.updateInterval then
-            SpBT:UpdateBuffTimers()
-            SpBT.updateTimer = 0
-        end
-    end)
+    -- Register minimal events
+    mainFrame:RegisterEvent("PLAYER_AURAS_CHANGED")
+    mainFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     
-    -- Create tooltip for main frame
-    self.frame:SetScript("OnEnter", function()
-        if SpBT.options.showTooltips then
-            GameTooltip:SetOwner(this, "ANCHOR_BOTTOMRIGHT")
-            GameTooltip:AddLine("SpBuffTracker Enhanced")
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine("Shift+Click and drag to move", 0, 1, 0)
-            GameTooltip:AddLine("Type /spbt for options", 0, 1, 0)
-            GameTooltip:Show()
-        end
-    end)
-    self.frame:SetScript("OnLeave", function()
-        GameTooltip:Hide()
-    end)
+    -- Set visibility
+    mainFrame:Show()
+    
+    -- Store the frame reference in both global and local tables
+    _G["SpBuffTrackerEnhancedMainFrame"] = mainFrame
+    self.frame = mainFrame
+    SpBuffTrackerEnhanced.frame = mainFrame
+    
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Simple main frame created successfully|r")
+    return mainFrame
 end
 
 -- Create a buff frame
@@ -255,7 +716,7 @@ function SpBT:CreateBuffFrame(buffIndex)
             local buff = SpBT.buffs[this:GetID()]
             if buff then
                 GameTooltip:AddLine(buff.name)
-                if buff.duration > 0 then
+                if buff and buff.duration and buff.duration > 0 and buff.timeLeft then
                     GameTooltip:AddLine("Time remaining: " .. SpBT:FormatTime(buff.timeLeft), 1, 1, 1)
                 end
                 GameTooltip:Show()
@@ -282,54 +743,110 @@ function SpBT:CreateBuffFrame(buffIndex)
     return frame
 end
 
--- Update all player buffs
+-- Update all player buffs - with better debugging for vanilla WoW 1.12 API
 function SpBT:UpdateAllBuffs()
-    -- Store old buffs for comparison
-    local oldBuffs = {}
-    for k, v in pairs(self.buffs) do
-        oldBuffs[v.name] = true
-    end
+    -- Make sure we're using the global reference
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
     
     -- Clear current buffs
     for i = 1, table.getn(self.buffs) do
-        local buffFrame = _G["SpBuffTrackerEnhancedBuff"..i]
-        if buffFrame and buffFrame.isFlashing then
-            self:StopFlashAnimation(buffFrame)
-        end
         self.buffs[i] = nil
     end
     
-    -- Check all player buffs
-    local buffIndex = 1
-    for i = 1, 32 do
-        local buffName, buffRank, buffIcon, buffCount, buffType, buffDuration, buffEnd, buffCaster = UnitBuff("player", i)
-        if not buffName then break end
-        
-        -- If this buff is being tracked
-        if self.trackedBuffs[buffName] then
-            -- Calculate remaining time
-            local timeLeft = 0
-            if buffEnd then
-                timeLeft = buffEnd - GetTime()
-            end
-            
-            -- Add to tracked buffs table
-            self.buffs[buffIndex] = {
-                name = buffName,
-                icon = buffIcon,
-                duration = buffDuration or 0,
-                timeLeft = timeLeft,
-                index = i
-            }
-            
-            -- Show notification when a new buff is gained
-            if self.options.alertOnBuffGain and not oldBuffs[buffName] then
-                self:ShowBuffNotification(buffName, buffIcon, timeLeft)
-            end
-            
-            buffIndex = buffIndex + 1
-        end
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9900SpBuffTracker: ---- CHECKING PLAYER BUFFS ----")
+    
+    -- Check if we have trackedBuffs
+    if not self.trackedBuffs or type(self.trackedBuffs) ~= "table" then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: trackedBuffs is missing or invalid!|r")
+        return
     end
+    
+    -- DEBUG: Print all tracked buffs we're looking for
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF9999FFSpBuffTracker Debug: Tracked buff names:|r")
+    for buffName, _ in pairs(self.trackedBuffs) do
+        DEFAULT_CHAT_FRAME:AddMessage("  - " .. buffName)
+    end
+    
+    -- SUPER VERBOSE DEBUG LOGGING
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF9999FFSpBuffTracker Debug: Starting buff scan using GetPlayerBuff API|r")
+    
+    -- Track buffs using vanilla WoW API with verbose logging
+    local buffCount = 0
+    local buffIndex = 1
+    local i = 0
+    local buffId = GetPlayerBuff(i, "HELPFUL")
+    
+    -- Log debug info about first buffId
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF9999FFSpBuffTracker Debug: First GetPlayerBuff returned ID: %d|r", buffId))
+    
+    -- Check all player buffs using GetPlayerBuff API
+    while buffId >= 0 do
+        buffCount = buffCount + 1
+        
+        -- Try to get the buff texture
+        local buffTexture = "Unknown"
+        local errorInTexture = false
+        
+        -- Use pcall to catch any errors
+        local success = pcall(function() 
+            buffTexture = GetPlayerBuffTexture(buffId)
+        end)
+        
+        if not success then
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000SpBuffTracker Error: Failed to get texture for buff ID %d|r", buffId))
+            errorInTexture = true
+        end
+        
+        -- Try to get buff time left
+        local timeLeft = 0
+        local errorInTimeLeft = false
+        
+        -- Use pcall to catch any errors
+        success = pcall(function() 
+            timeLeft = GetPlayerBuffTimeLeft(buffId)
+        end)
+        
+        if not success then
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFFF0000SpBuffTracker Error: Failed to get time left for buff ID %d|r", buffId))
+            errorInTimeLeft = true
+        end
+        
+        -- Debug info for each buff
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF9999FFSpBuffTracker Debug: Found buff %d: ID=%d, Texture=%s, TimeLeft=%.1f|r", 
+            buffCount, buffId, tostring(buffTexture), timeLeft))
+        
+        -- If we got the texture successfully, try to identify the buff
+        if not errorInTexture then
+            -- Convert texture to buff name
+            local buffName = self:GetBuffNameFromTexture(buffTexture)
+            
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF9999FFSpBuffTracker Debug:   Identified as: %s|r", buffName))
+            
+            -- If this buff is being tracked
+            if self.trackedBuffs[buffName] then
+                -- Add to tracked buffs table
+                self.buffs[buffIndex] = {
+                    name = buffName,
+                    icon = buffTexture,
+                    duration = timeLeft,
+                    timeLeft = timeLeft,
+                    index = i,
+                    id = buffId
+                }
+                
+                DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Tracking buff '%s', time left: %.1f|r", buffName, timeLeft))
+                buffIndex = buffIndex + 1
+            end
+        end
+        
+        -- Move to next buff
+        i = i + 1
+        buffId = GetPlayerBuff(i, "HELPFUL")
+    end
+    
+    -- Update number of buffs found
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Found %d total buffs, tracking %d|r", buffCount, buffIndex - 1))
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9900SpBuffTracker: ---- END OF BUFF CHECK ----")
     
     -- Update the layout
     self:LayoutBuffs()
@@ -378,35 +895,54 @@ function SpBT:ShowBuffNotification(buffName, buffIcon, duration)
         frame.duration:SetPoint("TOPLEFT", frame.text, "BOTTOMLEFT", 0, -2)
         frame.duration:SetJustifyH("LEFT")
         
-        -- Create fade animation
-        frame.fadeGroup = frame:CreateAnimationGroup()
+        -- Set up simple fade animation using OnUpdate
+        frame.fadeTime = 0
+        frame.fadeState = 0 -- 0 = fadein, 1 = wait, 2 = fadeout
+        frame.fadeTimer = 0
+        frame.totalTime = 3.5 -- Total time to show the notification
         
-        local fadeIn = frame.fadeGroup:CreateAnimation("Alpha")
-        fadeIn:SetDuration(0.3)
-        fadeIn:SetFromAlpha(0)
-        fadeIn:SetToAlpha(1)
-        fadeIn:SetOrder(1)
-        
-        local wait = frame.fadeGroup:CreateAnimation("Alpha")
-        wait:SetDuration(2.5)
-        wait:SetFromAlpha(1)
-        wait:SetToAlpha(1)
-        wait:SetOrder(2)
-        
-        local fadeOut = frame.fadeGroup:CreateAnimation("Alpha")
-        fadeOut:SetDuration(0.7)
-        fadeOut:SetFromAlpha(1)
-        fadeOut:SetToAlpha(0)
-        fadeOut:SetOrder(3)
-        
-        frame.fadeGroup:SetScript("OnFinished", function()
-            this:GetParent():Hide()
+        frame:SetScript("OnUpdate", function()
+            local elapsed = arg1
+            this.fadeTimer = this.fadeTimer + elapsed
+            
+            -- Fade in (0.3 seconds)
+            if this.fadeState == 0 then
+                local alpha = this.fadeTimer / 0.3
+                if alpha >= 1.0 then
+                    alpha = 1.0
+                    this.fadeState = 1
+                    this.fadeTimer = 0
+                end
+                this:SetAlpha(alpha)
+            -- Wait (2.5 seconds)
+            elseif this.fadeState == 1 then
+                if this.fadeTimer >= 2.5 then
+                    this.fadeState = 2
+                    this.fadeTimer = 0
+                end
+            -- Fade out (0.7 seconds)
+            elseif this.fadeState == 2 then
+                local alpha = 1.0 - (this.fadeTimer / 0.7)
+                if alpha <= 0 then
+                    alpha = 0
+                    this:Hide()
+                    this.fadeState = 0
+                    this.fadeTimer = 0
+                end
+                this:SetAlpha(alpha)
+            end
         end)
         
         self.notificationFrame = frame
         
-        -- Play a sound when showing
-        -- PlaySoundFile("Interface\\AddOns\\SpBuffTrackerEnhanced\\sounds\\buff_gained.ogg")
+        -- Try to play a sound if the file exists
+        local function PlaySoundSafely(path)
+            if DEFAULT_CHAT_FRAME then -- We use this as a simple existence check to avoid errors
+                PlaySoundFile(path)
+            end
+        end
+        
+        -- PlaySoundSafely("Interface\\AddOns\\SpBuffTrackerEnhanced\\sounds\\buff_gained.ogg")
     end
     
     -- Update notification
@@ -419,9 +955,11 @@ function SpBT:ShowBuffNotification(buffName, buffIcon, duration)
         self.notificationFrame.duration:SetText("Duration: Indefinite")
     end
     
-    -- Show and start animation
+    -- Reset and show
+    self.notificationFrame.fadeState = 0
+    self.notificationFrame.fadeTimer = 0
+    self.notificationFrame:SetAlpha(0)
     self.notificationFrame:Show()
-    self.notificationFrame.fadeGroup:Play()
 end
 
 -- Update buff timers
@@ -458,7 +996,14 @@ function SpBT:UpdateBuffTimers()
                             if (previousTime > 30 and buff.timeLeft <= 30) or
                                (previousTime > 10 and buff.timeLeft <= 10) or
                                (previousTime > 5 and buff.timeLeft <= 5) then
-                                -- PlaySoundFile("Interface\\AddOns\\SpBuffTrackerEnhanced\\sounds\\warning.ogg")
+                                -- Try to play a sound if the file exists
+                                local function PlaySoundSafely(path)
+                                    if DEFAULT_CHAT_FRAME then -- We use this as a simple existence check to avoid errors
+                                        PlaySoundFile(path)
+                                    end
+                                end
+                                
+                                -- PlaySoundSafely("Interface\\AddOns\\SpBuffTrackerEnhanced\\sounds\\warning.ogg")
                             end
                         end
                     else
@@ -484,31 +1029,40 @@ end
 
 -- Start flash animation on a buff frame
 function SpBT:StartFlashAnimation(frame)
-    if not frame.flashGroup then
-        frame.flashGroup = frame:CreateAnimationGroup()
-        frame.flashGroup:SetLooping("REPEAT")
+    -- Simple flash implementation for Vanilla WoW
+    if not frame.flashTimer then
+        frame.flashTimer = 0
+        frame.flashState = 1
+        frame.isFlashing = true
         
-        local fadeOut = frame.flashGroup:CreateAnimation("Alpha")
-        fadeOut:SetDuration(0.5)
-        fadeOut:SetFromAlpha(1.0)
-        fadeOut:SetToAlpha(0.3)
-        fadeOut:SetOrder(1)
-        
-        local fadeIn = frame.flashGroup:CreateAnimation("Alpha")
-        fadeIn:SetDuration(0.5)
-        fadeIn:SetFromAlpha(0.3)
-        fadeIn:SetToAlpha(1.0)
-        fadeIn:SetOrder(2)
+        -- Use OnUpdate for animation instead of the Animation API
+        frame:SetScript("OnUpdate", function()
+            local elapsed = arg1
+            this.flashTimer = this.flashTimer + elapsed
+            
+            if this.flashTimer > 0.5 then
+                this.flashTimer = 0
+                
+                if this.flashState == 1 then
+                    this:SetAlpha(0.4)
+                    this.flashState = 0
+                else
+                    this:SetAlpha(1.0)
+                    this.flashState = 1
+                end
+            end
+        end)
     end
-    
-    frame.flashGroup:Play()
 end
 
 -- Stop flash animation on a buff frame
 function SpBT:StopFlashAnimation(frame)
-    if frame.flashGroup then
-        frame.flashGroup:Stop()
+    if frame.isFlashing then
+        frame:SetScript("OnUpdate", nil)
+        frame:SetAlpha(1.0)
         frame.isFlashing = false
+        frame.flashTimer = nil
+        frame.flashState = nil
     end
 end
 
@@ -519,107 +1073,110 @@ function SpBT:FormatTime(timeInSeconds)
     -- Format: MM:SS
     if self.options.timeFormat == 1 then
         local minutes = math.floor(timeInSeconds / 60)
-        local seconds = math.floor(timeInSeconds % 60)
-        return string.format("%02d:%02d", minutes, seconds)
+        local seconds = math.floor(timeInSeconds - (minutes * 60))
+        return format("%02d:%02d", minutes, seconds)
     
     -- Format: M:SS
     elseif self.options.timeFormat == 2 then
         local minutes = math.floor(timeInSeconds / 60)
-        local seconds = math.floor(timeInSeconds % 60)
-        return string.format("%d:%02d", minutes, seconds)
+        local seconds = math.floor(timeInSeconds - (minutes * 60))
+        return format("%d:%02d", minutes, seconds)
     
     -- Format: Seconds only
     else
         if timeInSeconds >= 60 then
-            return string.format("%.0fm", timeInSeconds / 60)
+            return format("%.0fm", timeInSeconds / 60)
         else
-            return string.format("%.0f", timeInSeconds)
+            return format("%.0f", timeInSeconds)
         end
     end
 end
 
--- Layout buff frames
+-- Layout buff frames - improved simple version with better debugging
 function SpBT:LayoutBuffs()
-    local buffCount = table.getn(self.buffs)
+    -- Get number of buffs
+    local buffCount = 0
+    if self.buffs then
+        buffCount = table.getn(self.buffs)
+    end
     
-    -- Create buff frames as needed
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Laying out %d buffs|r", buffCount))
+    
+    -- Safety check for main frame
+    if not self.frame then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: No main frame available!|r")
+        return
+    end
+    
+    -- Don't try to layout if there are no buffs
+    if buffCount == 0 then
+        -- Update the main frame text to show status
+        local title = _G["SpBuffTrackerEnhancedFrameTitle"]
+        if title then
+            title:SetText("SpBuffTracker - No Buffs")
+        end
+        
+        -- Make sure the main frame is big enough to see
+        self.frame:SetHeight(50)
+        self.frame:SetWidth(160)
+        return
+    end
+    
+    -- Update the main frame text 
+    local title = _G["SpBuffTrackerEnhancedFrameTitle"]
+    if title then
+        title:SetText("SpBuffTracker - " .. buffCount .. " Buffs")
+    end
+    
+    -- Calculate required frame size
+    local frameHeight = 20 + (buffCount * 20) -- Title + 20px per buff
+    local frameWidth = 200 -- Fixed width
+    
+    -- Resize the main frame
+    self.frame:SetHeight(frameHeight)
+    self.frame:SetWidth(frameWidth)
+    
+    -- Debug buff contents
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF66CCFFSpBuffTracker: Buff content being laid out:|r")
+    
+    -- Create or update buff text lines
     for i = 1, buffCount do
-        local buffFrame = _G["SpBuffTrackerEnhancedBuff"..i]
-        if not buffFrame then
-            buffFrame = self:CreateBuffFrame(i)
-        end
-        
-        -- Set ID for reference
-        buffFrame:SetID(i)
-        
-        -- Update appearance
         local buff = self.buffs[i]
-        buffFrame.icon:SetTexture(buff.icon)
         
-        -- Show/hide border
-        if self.options.showBorder then
-            buffFrame.border:Show()
-        else
-            buffFrame.border:Hide()
+        -- Debug info for each buff we're laying out
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker:   Buff %d: %s (%.1f sec)|r", 
+            i, buff.name, buff.timeLeft))
+        
+        local textName = "SpBuffTrackerEnhancedBuffText" .. i
+        
+        -- Create or get text frame
+        local textFrame = _G[textName]
+        if not textFrame then
+            textFrame = self.frame:CreateFontString(textName, "OVERLAY", "GameFontHighlight")
+            DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF66CCFFSpBuffTracker: Created text frame %d|r", i))
         end
         
-        -- Update cooldown
-        if buff.duration > 0 then
-            CooldownFrame_SetTimer(buffFrame.cooldown, GetTime() - (buff.duration - buff.timeLeft), buff.duration, 1)
-        else
-            buffFrame.cooldown:Hide()
+        -- Position text
+        textFrame:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 10, -(20 + (i-1) * 20))
+        
+        -- Format text with buff info
+        local timeStr = "∞"
+        if buff.timeLeft and buff.timeLeft > 0 then
+            timeStr = self:FormatTime(buff.timeLeft)
         end
         
-        -- Update timer text
-        if self.options.showTimerText and buff.duration > 0 then
-            buffFrame.timer:SetText(self:FormatTime(buff.timeLeft))
-            buffFrame.timer:Show()
-        else
-            buffFrame.timer:Hide()
-        end
-        
-        -- Update name text
-        if self.options.showText then
-            local shortName = string.gsub(buff.name, "Elixir of ", "")
-            shortName = string.gsub(shortName, "Flask of ", "")
-            buffFrame.name:SetText(shortName)
-            buffFrame.name:Show()
-        else
-            buffFrame.name:Hide()
-        end
-        
-        -- Position the buff frame
-        buffFrame:ClearAllPoints()
-        if i == 1 then
-            if self.options.growUpward then
-                buffFrame:SetPoint("BOTTOM", self.frame, "BOTTOM", 0, 0)
-            else
-                buffFrame:SetPoint("TOP", self.frame, "TOP", 0, 0)
-            end
-        else
-            local prevFrame = _G["SpBuffTrackerEnhancedBuff"..(i-1)]
-            if self.options.growUpward then
-                buffFrame:SetPoint("BOTTOM", prevFrame, "TOP", 0, self.options.spacing)
-            else
-                buffFrame:SetPoint("TOP", prevFrame, "BOTTOM", 0, -self.options.spacing)
-            end
-        end
-        
-        -- Show the frame
-        buffFrame:Show()
+        -- Update text
+        textFrame:SetText(string.format("%s: %s", buff.name, timeStr))
+        textFrame:Show()
     end
     
-    -- Hide unused buff frames
+    -- Hide any unused text frames
     for i = buffCount + 1, 32 do
-        local buffFrame = _G["SpBuffTrackerEnhancedBuff"..i]
-        if buffFrame then
-            buffFrame:Hide()
+        local textFrame = _G["SpBuffTrackerEnhancedBuffText" .. i]
+        if textFrame then
+            textFrame:Hide()
         end
     end
-    
-    -- Resize main frame
-    local totalHeight = buffCount * (self.options.buffSize + self.options.spacing)
-    self.frame:SetHeight(totalHeight)
 end
 
 -- Create GUI options panel
@@ -644,7 +1201,8 @@ function SpBT:CreateOptionsPanel()
     scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -30, 8)
     
     local content = CreateFrame("Frame", "SpBuffTrackerEnhancedOptionsScrollContent", scrollFrame)
-    content:SetSize(scrollFrame:GetWidth(), 500) -- Height will adjust as needed
+    content:SetWidth(scrollFrame:GetWidth())
+    content:SetHeight(500) -- Height will adjust as needed
     scrollFrame:SetScrollChild(content)
     
     local y = 0
@@ -689,7 +1247,7 @@ function SpBT:CreateOptionsPanel()
         slider:SetHeight(16)
         slider:SetMinMaxValues(min, max)
         slider:SetValueStep(step)
-        slider:SetObeyStepOnDrag(true)
+        -- SetObeyStepOnDrag doesn't exist in WoW 1.12, removed
         slider:SetValue(SpBT.options[key])
         
         getglobal(slider:GetName() .. "Low"):SetText(min)
@@ -697,7 +1255,7 @@ function SpBT:CreateOptionsPanel()
         getglobal(slider:GetName() .. "Text"):SetText(slider:GetValue())
         
         slider:SetScript("OnValueChanged", function()
-            local val = floor(this:GetValue() * 100 + 0.5) / 100 -- Round to 2 decimal places
+            local val = math.floor(this:GetValue() * 100) / 100 -- Round to 2 decimal places
             getglobal(this:GetName() .. "Text"):SetText(val)
             SpBT.options[key] = val
             SpBT:ApplySettings()
@@ -827,6 +1385,9 @@ function SpBT:CreateBuffManagementPanel()
     
     -- Create or show panel
     if not self.buffPanel then
+        -- Debug
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFBBBBFFSpBuffTracker: Creating buff management panel|r")
+        
         local panel = CreateFrame("Frame", "SpBuffTrackerEnhancedBuffPanel", UIParent)
         panel:SetWidth(300)
         panel:SetHeight(400)
@@ -857,12 +1418,17 @@ function SpBT:CreateBuffManagementPanel()
         -- Create scrollframe for buff list
         local scroll = CreateFrame("ScrollFrame", "SpBuffTrackerEnhancedBuffScroll", panel, "UIPanelScrollFrameTemplate")
         scroll:SetPoint("TOPLEFT", panel, "TOPLEFT", 20, -40)
-        scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -40, 40)
+        scroll:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -40, 70)
         
         local content = CreateFrame("Frame", "SpBuffTrackerEnhancedBuffScrollContent", scroll)
         content:SetWidth(scroll:GetWidth())
         content:SetHeight(500) -- Will adjust dynamically
         scroll:SetScrollChild(content)
+        
+        -- Description text
+        local desc = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        desc:SetPoint("BOTTOM", panel, "BOTTOM", 0, 60)
+        desc:SetText("Add a new buff to track:")
         
         -- Add buff button
         local addBuffBox = CreateFrame("EditBox", "SpBuffTrackerEnhancedAddBuffBox", panel, "InputBoxTemplate")
@@ -879,21 +1445,88 @@ function SpBT:CreateBuffManagementPanel()
         addBuffButton:SetScript("OnClick", function()
             local buffName = addBuffBox:GetText()
             if buffName and buffName ~= "" then
-                SpBT.trackedBuffs[buffName] = true
+                -- Add to tracked buffs using the global reference
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF77FFAASpBuffTracker: Adding '" .. buffName .. "' to tracked buffs|r")
+                
+                -- Make sure we're using the global table
+                SpBuffTrackerEnhanced.trackedBuffs[buffName] = true
+                
+                -- Update our local reference
+                SpBT.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
+                
+                -- Save changes
                 SpBT:SaveVariables()
+                
+                -- Update display
                 SpBT:UpdateAllBuffs()
                 SpBT:UpdateBuffManagementPanel()
+                
+                -- Clear the input box
                 addBuffBox:SetText("")
+                addBuffBox:ClearFocus()
             end
         end)
+        
+        -- Reset defaults button
+        local resetButton = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+        resetButton:SetPoint("BOTTOM", panel, "BOTTOM", 0, 38)
+        resetButton:SetWidth(150)
+        resetButton:SetHeight(22)
+        resetButton:SetText("Restore Default Buffs")
+        resetButton:SetScript("OnClick", function()
+            -- Confirm with the user
+            StaticPopupDialogs["SPBUFFTRACKER_RESTORE_DEFAULTS"] = {
+                text = "Restore default buff list? This will remove any custom buffs you've added.",
+                button1 = "Yes",
+                button2 = "No",
+                OnAccept = function()
+                    DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9900SpBuffTracker: User confirmed restore defaults|r")
+                    SpBT:RestoreDefaultBuffs()
+                    
+                    -- Make sure the updates are reflected in the panel
+                    SpBT:UpdateBuffManagementPanel()
+                end,
+                timeout = 0,
+                whileDead = true,
+                hideOnEscape = true,
+            }
+            StaticPopup_Show("SPBUFFTRACKER_RESTORE_DEFAULTS")
+        end)
+        
+        -- Handle Enter key in text box
+        addBuffBox:SetScript("OnEnterPressed", function()
+            addBuffButton:Click()
+        end)
+        
+        -- Handle Escape key in text box
+        addBuffBox:SetScript("OnEscapePressed", function()
+            this:SetText("")
+            this:ClearFocus()
+        end)
+        
+        -- Current buff list label
+        local listLabel = panel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+        listLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 25, -25)
+        listLabel:SetText("Currently Tracked Buffs:")
         
         -- Store references
         panel.content = content
         self.buffPanel = panel
+        
+        -- Set up a script to run when the panel becomes visible
+        panel:SetScript("OnShow", function()
+            -- This ensures the buff list is fresh every time the panel is shown
+            SpBT:UpdateBuffManagementPanel()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFBBBBFFSpBuffTracker: Buff panel shown, updating content|r")
+        end)
     end
     
     -- Update buff list
     self:UpdateBuffManagementPanel()
+    
+    -- Force a refresh to make absolutely sure we're showing the latest data
+    SpBuffTrackerEnhanced.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs or {}
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
     
     -- Show panel
     self.buffPanel:Show()
@@ -905,23 +1538,63 @@ function SpBT:UpdateBuffManagementPanel()
     
     local content = self.buffPanel.content
     
+    -- Debug - show what we're working with
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00SpBuffTracker Debug: Updating buff management panel|r")
+    
     -- Clear existing content
+    content:SetHeight(500) -- Reset height
     local children = {content:GetChildren()}
     for _, child in pairs(children) do
         child:Hide()
+    end
+    
+    -- Check if the global trackedBuffs exists and has entries
+    if not self.trackedBuffs or type(self.trackedBuffs) ~= "table" then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: trackedBuffs is missing or not a table!|r")
+        return
     end
     
     -- Add buff entries
     local y = 0
     local count = 0
     
-    for buffName in pairs(self.trackedBuffs) do
+    -- Print debugging info
+    DEFAULT_CHAT_FRAME:AddMessage("|cFFBBBBBBSpBuffTracker Debug: Raw entries in trackedBuffs:|r")
+    for buffName, isTracked in pairs(self.trackedBuffs) do
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("  '%s' = %s", buffName, tostring(isTracked)))
+    end
+    
+    -- Create sorted list for display
+    local buffNames = {}
+    for buffName, isTracked in pairs(self.trackedBuffs) do
+        if isTracked then
+            table.insert(buffNames, buffName)
+        end
+    end
+    table.sort(buffNames)
+    
+    -- Display debug info
+    DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFFBBBBBBSpBuffTracker Debug: Found %d buffs to display|r", table.getn(buffNames)))
+    
+    -- Create a frame for each tracked buff
+    for i, buffName in ipairs(buffNames) do
         count = count + 1
         
         local frame = CreateFrame("Frame", "SpBuffTrackerEnhancedBuffEntry"..count, content)
         frame:SetWidth(content:GetWidth() - 20)
         frame:SetHeight(24)
         frame:SetPoint("TOPLEFT", content, "TOPLEFT", 0, y)
+        
+        -- Create background for hover effect
+        local bg = frame:CreateTexture(nil, "BACKGROUND")
+        bg:SetAllPoints(frame)
+        bg:SetTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight")
+        bg:SetBlendMode("ADD")
+        bg:SetAlpha(0)
+        
+        frame:SetScript("OnEnter", function() this.bg:SetAlpha(0.3) end)
+        frame:SetScript("OnLeave", function() this.bg:SetAlpha(0) end)
+        frame.bg = bg
         
         -- Buff name
         local name = frame:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
@@ -931,16 +1604,27 @@ function SpBT:UpdateBuffManagementPanel()
         name:SetJustifyH("LEFT")
         
         -- Remove button
-        local remove = CreateFrame("Button", nil, frame)
+        local remove = CreateFrame("Button", "SpBuffTrackerEnhancedBuffEntryRemove"..count, frame)
         remove:SetWidth(16)
         remove:SetHeight(16)
         remove:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
         remove:SetNormalTexture("Interface\\Buttons\\UI-MinusButton-UP")
         remove:SetPushedTexture("Interface\\Buttons\\UI-MinusButton-DOWN")
         remove:SetHighlightTexture("Interface\\Buttons\\UI-PlusButton-Hilight")
+        
+        -- Store the current buff name directly in a local variable
+        local currentBuffName = buffName
         remove:SetScript("OnClick", function()
-            SpBT.trackedBuffs[buffName] = nil
+            -- Note the exact buff name in the debug log
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9977SpBuffTracker: Removing buff: '" .. currentBuffName .. "'|r")
+            
+            -- Remove the buff
+            SpBuffTrackerEnhanced.trackedBuffs[currentBuffName] = nil
+            
+            -- Save changes
             SpBT:SaveVariables()
+            
+            -- Update display
             SpBT:UpdateAllBuffs()
             SpBT:UpdateBuffManagementPanel()
         end)
@@ -948,13 +1632,81 @@ function SpBT:UpdateBuffManagementPanel()
         y = y - 24
     end
     
+    -- If no buffs are being tracked, show a message
+    if count == 0 then
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9977SpBuffTracker Debug: No buffs to display, showing empty message|r")
+        
+        local noBuffs = content:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        noBuffs:SetPoint("TOP", content, "TOP", 0, -30)
+        noBuffs:SetText("No buffs are currently being tracked.\nAdd buffs using the box below or click 'Restore Default Buffs'.")
+        noBuffs:SetJustifyH("CENTER")
+    end
+    
     -- Adjust content height
     content:SetHeight(math.max(math.abs(y), 200))
+    
+    -- Make sure content is visible
+    content:Show()
+    
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF77CCFFSpBuffTracker Debug: Created " .. count .. " buff entries in the panel|r")
+end
+
+-- Restore default buffs
+function SpBT:RestoreDefaultBuffs()
+    DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced: Restoring default tracked buffs...|r")
+    
+    -- Clear existing trackedBuffs
+    SpBuffTrackerEnhanced.trackedBuffs = {}
+    
+    -- Add default buffs to global table
+    local defaultBuffs = {
+        -- World buffs
+        "Rallying Cry of the Dragonslayer",
+        "Spirit of Zandalar",
+        "Songflower Serenade",
+        "Warchief's Blessing",
+        "Slip'kik's Savvy",
+        "Fengus' Ferocity",
+        "Mol'dar's Moxie",
+        "Fire Festival Fortitude",
+        "Fire Festival Fury",
+        -- Consumables
+        "Elixir of the Mongoose",
+        "Elixir of Giants",
+        "Elixir of Greater Agility",
+        "Elixir of Greater Intellect",
+        "Greater Arcane Elixir",
+        "Elixir of Greater Firepower",
+        "Flask of Supreme Power",
+        "Flask of the Titans",
+        "Flask of Distilled Wisdom",
+        "Mageblood Potion",
+        "Blessed Sunfruit",
+        "Smoked Desert Dumplings",
+        "Grilled Squid",
+        "Nightfin Soup",
+        "Dire Maul Tribute",
+    }
+    
+    -- Add each buff individually and log it
+    for _, buffName in ipairs(defaultBuffs) do
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF77FFAASpBuffTracker: Adding default buff: " .. buffName .. "|r")
+        SpBuffTrackerEnhanced.trackedBuffs[buffName] = true
+    end
+    
+    -- Update our local reference
+    self.trackedBuffs = SpBuffTrackerEnhanced.trackedBuffs
+    
+    -- Save to DB
+    self:SaveVariables()
+    
+    -- Update tracking
+    self:UpdateAllBuffs()
 end
 
 -- Handle slash commands
 function SpBT:HandleSlashCommand(msg)
-    msg = string.lower(msg)
+    msg = string.lower(msg or "")
     local args = {}
     for arg in string.gfind(msg, "%S+") do
         table.insert(args, arg)
@@ -964,27 +1716,56 @@ function SpBT:HandleSlashCommand(msg)
     if not args[1] or args[1] == "help" then
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00SpBuffTracker Enhanced Commands:|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt - Show this help|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt config - Open configuration panel|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt toggle - Toggle addon on/off|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt scale <value> - Set scale (0.5-2.0)|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt grow <up/down> - Set growth direction|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt size <value> - Set buff size (16-64)|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt spacing <value> - Set spacing (0-10)|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt text <show/hide> - Toggle buff names|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt timer <show/hide> - Toggle timers|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt border <show/hide> - Toggle borders|r")
-        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt tooltip <show/hide> - Toggle tooltips|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt show - Show the addon frame|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt hide - Hide the addon frame|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt update - Force update buff tracking|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt debug - Show detailed debug information|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt scan - Scan and list all player buffs|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt reset - Reset to defaults|r")
+    --     return
+    -- end
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt timeformat <1/2/3> - Set time format|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt track <buffname> - Track a new buff|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt untrack <buffname> - Remove a tracked buff|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt buffs - Open buff management panel|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt show - Show the addon frame|r")
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt hide - Hide the addon frame|r")
         DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00/spbt reset - Reset to defaults|r")
+        return
+    end
+    
+    -- Show frame
+    if args[1] == "show" then
+        if self.frame then
+            self.frame:Show()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced frame shown.|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Frame is nil!|r")
+        end
+        return
+    end
+    
+    -- Hide frame
+    if args[1] == "hide" then
+        if self.frame then
+            self.frame:Hide()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Enhanced frame hidden.|r")
+        else
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Frame is nil!|r")
+        end
         return
     end
     
     -- Open config
     if args[1] == "config" then
-        InterfaceOptionsFrame_OpenToCategory("SpBuffTracker Enhanced")
+        -- Check if interface options panel exists (only in TBC+)
+        if InterfaceOptionsFrame_OpenToCategory then
+            InterfaceOptionsFrame_OpenToCategory("SpBuffTracker Enhanced")
+        else
+            -- For vanilla, create a standalone config window
+            self:CreateBuffManagementPanel()
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00SpBuffTracker Enhanced: Use /spbt buffs for configuration in vanilla WoW.|r")
+        end
         return
     end
     
@@ -997,13 +1778,26 @@ function SpBT:HandleSlashCommand(msg)
     -- Toggle addon
     if args[1] == "toggle" then
         self.options.enabled = not self.options.enabled
+        
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFFFF00SpBuffTracker: Toggle command received - enabled = " .. tostring(self.options.enabled) .. "|r")
+        
         if self.options.enabled then
-            self.frame:Show()
-            DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced enabled.|r")
+            if self.frame then
+                self.frame:Show()
+                DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced enabled - frame shown.|r")
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Frame is nil!|r")
+            end
         else
-            self.frame:Hide()
-            DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Enhanced disabled.|r")
+            if self.frame then
+                self.frame:Hide()
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Enhanced disabled - frame hidden.|r")
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cFFFF0000SpBuffTracker Error: Frame is nil!|r")
+            end
         end
+        
+        -- Save the enabled setting
         self:SaveVariables()
         return
     end
@@ -1216,10 +2010,104 @@ function SpBT:HandleSlashCommand(msg)
 end
 
 -- Initialize when addon is loaded
-local frame = CreateFrame("Frame")
-frame:RegisterEvent("ADDON_LOADED")
-frame:SetScript("OnEvent", function()
+local loadingFrame = CreateFrame("Frame")
+loadingFrame:RegisterEvent("ADDON_LOADED")
+loadingFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+loadingFrame:SetScript("OnEvent", function()
     if event == "ADDON_LOADED" and arg1 == "SpBuffTrackerEnhanced" then
+        -- Print debug message
+        DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00SpBuffTracker Enhanced: Addon loading...|r")
+        
+        -- FORCE SET DEFAULT TRACKED BUFFS REGARDLESS OF SAVED VARIABLES
+        -- Let's fix this once and for all
+        DEFAULT_CHAT_FRAME:AddMessage("|cFFFF9900SpBuffTracker Enhanced: FORCING default tracked buffs...|r")
+        SpBuffTrackerEnhanced.trackedBuffs = {
+            -- World buffs
+            ["Rallying Cry of the Dragonslayer"] = true,
+            ["Spirit of Zandalar"] = true,
+            ["Songflower Serenade"] = true,
+            ["Warchief's Blessing"] = true,
+            ["Slip'kik's Savvy"] = true,
+            ["Fengus' Ferocity"] = true,
+            ["Mol'dar's Moxie"] = true,
+            ["Fire Festival Fortitude"] = true,
+            ["Fire Festival Fury"] = true,
+            -- Consumables
+            ["Elixir of the Mongoose"] = true,
+            ["Elixir of Giants"] = true,
+            ["Elixir of Greater Agility"] = true,
+            ["Elixir of Greater Intellect"] = true,
+            ["Greater Arcane Elixir"] = true,
+            ["Elixir of Greater Firepower"] = true,
+            ["Flask of Supreme Power"] = true,
+            ["Flask of the Titans"] = true,
+            ["Flask of Distilled Wisdom"] = true,
+            ["Mageblood Potion"] = true,
+            ["Blessed Sunfruit"] = true,
+            ["Smoked Desert Dumplings"] = true,
+            ["Grilled Squid"] = true,
+            ["Nightfin Soup"] = true,
+            ["Dire Maul Tribute"] = true,
+            -- Class buffs for testing
+            ["Power Word: Fortitude"] = true,
+            ["Prayer of Spirit"] = true,
+            ["Blessing of Kings"] = true,
+            ["Blessing of Wisdom"] = true,
+            ["Mark of the Wild"] = true,
+            ["Arcane Intellect"] = true,
+        }
+        
+        -- Directly create/update the saved variable to match
+        if not SpBuffTrackerEnhancedDB then
+            SpBuffTrackerEnhancedDB = {}
+        end
+        SpBuffTrackerEnhancedDB.trackedBuffs = {}
+        for buffName, _ in pairs(SpBuffTrackerEnhanced.trackedBuffs) do
+            SpBuffTrackerEnhancedDB.trackedBuffs[buffName] = true
+            DEFAULT_CHAT_FRAME:AddMessage("|cFFAA66FFSpBuffTracker: Added default buff: " .. buffName .. "|r")
+        end
+        
+        -- Count how many tracked buffs we have
+        local count = 0
+        for _ in pairs(SpBuffTrackerEnhanced.trackedBuffs) do
+            count = count + 1
+        end
+        DEFAULT_CHAT_FRAME:AddMessage(string.format("|cFF00FF00SpBuffTracker Enhanced: Set %d tracked buffs|r", count))
+        
+        -- Initialize the addon
         SpBT:Initialize()
+    elseif event == "PLAYER_ENTERING_WORLD" then
+        -- Force an update when player enters world
+        if SpBT and SpBT.UpdateAllBuffs then
+            SpBT:UpdateAllBuffs()
+        end
+--     end
+-- end)
+-- end)end
+--         end)
+        
+        -- Add info about the main frame status
+        -- debugFrame:SetScript("OnUpdate", function()
+        --     local status = "Unknown"
+        --     local color = "|cFFFFFFFF"
+            
+        --     if SpBuffTrackerEnhancedMainFrame then
+        --         if SpBuffTrackerEnhancedMainFrame:IsVisible() then
+        --             status = "Visible"
+        --             color = "|cFF00FF00"
+        --         else
+        --             status = "Hidden"
+        --             color = "|cFFFF0000"
+        --         end
+        --     else
+        --         status = "Not Found"
+        --         color = "|cFFFF00FF"
+        --     end
+            
+        --     text:SetText("SpBuffTracker Debug\nClick to toggle main frame\nStatus: " .. color .. status .. "|r")
+        -- end)
+        
+        -- -- Show the debug frame
+        -- debugFrame:Show()
     end
 end)
