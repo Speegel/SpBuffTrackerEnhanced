@@ -7,8 +7,20 @@
 ## X-Category: Buffs
 
 # Main addon file
-SpBuffTrackerEnhanced.lua
+# SpBuffTrackerEnhanced.lua
 
 # Sound files
 # sounds\warning.ogg
 # sounds\buff_gained.ogg
+
+# Core files
+Core.lua
+BuffData.lua
+GUI.lua
+Config.lua
+
+# Module files
+Tracking.lua
+Layout.lua
+Utils.lua
+SlashCommands.lua
